@@ -1,0 +1,462 @@
+#include	<stdio.h>
+#include 	<stdlib.h>
+#include	<pthread.h>
+#include 	<stdbool.h>
+#include 	<time.h>
+
+//define testes
+#define LIMITE_FRAMES 8
+#define LIMITE_PROCESSOS 5
+#define LIMITE_PAGINAS 3
+#define WORKING_SET_LIMIT 4
+#define MEMORIA_2_LIM LIMITE_PROCESSOS * LIMITE_PAGINAS
+
+
+//define total
+//#define LIMITE_FRAMES 64
+//define MEMORIA_2_LIM LIMITE_FRAMES
+//#define LIMITE_PROCESSOS 20
+//#define LIMITE_PAGINAS 50
+//#define WORKING_SET_LIMIT 4
+
+#define DELAY 3000000
+
+
+struct Page{
+	int processo_id;
+    int number;
+    int value;
+		//int cont;
+};
+
+struct WorkingSet{
+	int ids[LIMITE_PAGINAS];
+	int frames[LIMITE_PAGINAS];
+};
+
+struct Process{
+    int id;
+    struct Page page_list[LIMITE_PAGINAS];
+    struct WorkingSet works;
+};
+
+int n_processo = 0;
+struct Process lista_processos[LIMITE_PROCESSOS];
+struct Process vetores_cache[LIMITE_PROCESSOS]; // testes
+int processo_rodando[LIMITE_PROCESSOS] = { [0 ... LIMITE_PROCESSOS-1 ] = -1 };
+int n_processos_exec =0;
+int processos_parados[LIMITE_PROCESSOS] = { [0 ... LIMITE_PROCESSOS-1 ] = -1 };
+int n_processos_parados=0;
+
+
+int recent_frame[LIMITE_FRAMES] = { [0 ... LIMITE_FRAMES-1 ] = -1 };
+int n_frames_livres = LIMITE_FRAMES;
+int n_frames_usados = 0;
+
+struct Page memoria_principal[LIMITE_FRAMES];
+struct Page virtual_memory[MEMORIA_2_LIM];
+
+pthread_t thread[LIMITE_PROCESSOS];
+pthread_mutex_t memoria_lock;
+pthread_mutex_t lista_processos_lock;
+
+int page_queue[LIMITE_FRAMES];
+
+
+
+void* execute_process(int id){
+	int i;
+	for(i = 0; i < LIMITE_PAGINAS; i++){
+		pthread_mutex_lock(&memoria_lock);
+		usleep(DELAY);
+		printf("\n");
+  		printf("---------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n");
+		printf("\n");
+		printf("Solicitando espaço na memória para a página %d do processo %d \n", i, id);
+		request_page(id, i);
+		print_memoria();
+		pthread_mutex_unlock(&memoria_lock);
+		usleep(0);
+	}
+
+	pthread_mutex_lock(&memoria_lock);
+	printf("\n");
+	printf("---------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n");
+	printf("\nParando o processo %d\n", id);
+	stop_process(id);
+	print_memoria();
+	pthread_mutex_unlock(&memoria_lock);
+}
+
+
+int main( int argc, char *argv[ ] ){
+
+	for (int i = 0; i < LIMITE_FRAMES; i++){
+		memoria_principal[i].processo_id = -1;
+	}
+	for (int i = 0; i < MEMORIA_2_LIM; i++){
+		virtual_memory[i].processo_id = -1;
+	}
+
+
+	if (pthread_mutex_init(&memoria_lock, NULL) != 0) {
+        printf("\n mutex failed\n");
+        return 1;
+    }
+    if (pthread_mutex_init(&lista_processos_lock, NULL) != 0) {
+        printf("\n mutex failed\n");
+        return 1;
+    }
+
+
+	for(int i = 0; i < LIMITE_PROCESSOS; i++){
+		pthread_create(&thread[i], NULL, execute_process, create_process());
+		usleep(DELAY);
+	}
+
+	for(int i = 0; i < LIMITE_PROCESSOS; i++){
+		pthread_join(thread[i], NULL);
+	}
+
+	pthread_mutex_destroy(&memoria_lock);
+
+	return 0;
+}
+
+
+int create_process(){
+	int i;
+	struct Process processo;
+	pthread_mutex_lock(&lista_processos_lock);
+	processo.id = n_processo;
+	lista_processos[processo.id] = processo;
+	n_processo++;
+	processo_rodando[n_processos_exec] = processo.id;
+	n_processos_exec++;
+	for(i=0;i<LIMITE_PAGINAS;i++) lista_processos[processo.id].works.frames[i] = -1;
+	pthread_mutex_unlock(&lista_processos_lock);
+	initialize_page_list_of_process(LIMITE_PAGINAS, n_processo - 1);
+
+	return processo.id;
+}
+
+
+void print_memoria(){
+
+	printf( "Processos em execução: \n");
+	for (int i=0; i<LIMITE_PROCESSOS;i++)
+		if (processo_rodando[i] > -1)
+			printf( "%i ",processo_rodando[i]);
+	printf("\n");
+	printf( "Processos terminados: \n" );
+	for (int i=0; i<LIMITE_PROCESSOS;i++)
+		if (processos_parados[i] >-1)
+			printf( "%i " ,processos_parados[i]);
+
+	printf("\n");
+
+	n_frames_usados = 0;
+	n_frames_livres = 0;
+
+	printf("\tMEMORIA PRINCIPAL\n");
+
+	printf("\n");
+
+	for (int i = 0; i < LIMITE_FRAMES; i++){
+		if(memoria_principal[i].processo_id > -1){
+			printf("Frame %d : Processo: %2d  Página: %d.\n", i, memoria_principal[i].processo_id, memoria_principal[i].number);
+			n_frames_usados++;
+		}
+		else{
+			printf("Frame %d : Vazio\n", i);
+			n_frames_livres++;
+		}
+	}
+	print_LRU();
+}
+
+void initialize_page_list_of_process(int size, int processo_id){
+	for(int i = 0; i < size; i++)
+	{
+		lista_processos[processo_id].page_list[i].processo_id = processo_id;
+		lista_processos[processo_id].page_list[i].number = i;
+	}
+}
+
+void stop_process(int processo_id){
+
+	processos_parados[n_processos_parados] = processo_id;
+	n_processos_parados++;
+	for (int i=0; i<LIMITE_PROCESSOS;i++) if (processo_rodando[i] == processo_id) processo_rodando[i] = -1;
+
+	for (int i = 0; i < LIMITE_FRAMES; i++){
+		if(memoria_principal[i].processo_id == processo_id){
+			memoria_principal[i].processo_id = -1;
+		}
+	}
+
+	for (int i = 0; i < LIMITE_PAGINAS; i++) lista_processos[processo_id].works.frames[i]=-1;
+}
+
+
+void memory_overflow(){
+
+	printf("*ERRO OVERFLOW\n");
+}
+
+void add_page_to_queue(int newPage){
+	shift_queue(0);
+	page_queue[LIMITE_FRAMES - 1] = newPage;
+}
+
+void refresh_queue(int page){
+	int offSet = get_queue_offset(page);
+	shift_queue(offSet);
+	page_queue[LIMITE_FRAMES - 1] = page;
+}
+
+void shift_queue(int offSet){
+	int i;
+	for (i = offSet; i < LIMITE_FRAMES - 1; i++) page_queue[i] = page_queue[i+1];
+}
+
+int get_queue_offset(int page){
+	int i;
+	for (i = 0; i < LIMITE_FRAMES; i++)
+	{
+	    if(page_queue[i] == page)
+	    	return i;
+	}
+}
+
+
+
+void print_LRU2(){
+	int i;
+
+		for (i = 0; i < LIMITE_FRAMES; i++){
+			if(i == 0)
+				printf("\nLRU\n    |\tPróximo frame a sair da memória %d: Processo: %d -> Page: %d.\n", i, page_queue[i]/LIMITE_PAGINAS, page_queue[i]%LIMITE_PAGINAS);
+			else if(i == LIMITE_FRAMES -1)
+				printf("    |\tÚltima frame a entrar na memória %d: Processo: %d -> Page: %d.\n", i, page_queue[i]/LIMITE_PAGINAS, page_queue[i]%LIMITE_PAGINAS);
+			else
+				printf("    |\t %d: Página: %d -> Processo: %d.\n", i, page_queue[i]/LIMITE_PAGINAS, page_queue[i]%LIMITE_PAGINAS);
+		}
+		printf("\n");
+}
+
+void print_LRU(){
+	int i;
+	printf("\nLRU ");
+	printf("\n Frame mais recente a ser alterado ->" );
+	printf("  " "%i" , recent_frame[0]);
+	//for(i=1;i<LIMITE_FRAMES;i++) printf("  %i", recent_frame[i]);
+	for(i=1;i<LIMITE_FRAMES;i++) if(recent_frame[i] != -1) printf("  %i", recent_frame[i]);
+	printf(" <-Próximo a sair quando a memória estiver cheia \n");
+}
+
+
+
+bool using_all_working_set(int processo_id){
+	int i;
+	for (i = 0; i < LIMITE_PAGINAS; i++) if (lista_processos[processo_id].works.frames[i]==-1){
+		return false;
+	}
+	return true;
+}
+
+bool workingset_is_full(int processo_id){
+	int i,workingset =0;
+
+	for (i = 0; i < LIMITE_PAGINAS; i++) if (lista_processos[processo_id].works.frames[i] != -1) workingset++;
+
+	if (workingset == WORKING_SET_LIMIT) return true;
+	else if (workingset < WORKING_SET_LIMIT) return false;
+	else if (workingset > WORKING_SET_LIMIT) {
+		printf( ":::: WORKING_SET_LIMIT Estourado pelo processo %i ::::\n", processo_id);
+
+
+		exit(-1);
+	}
+}
+
+void request_page(int processo_id, int page_number){
+	int frame=LIMITE_FRAMES-1;//por padrao, em caso de erro, remover o last frame da lista para a virtual
+	int freeframes = free_frames();
+
+	if( workingset_is_full(processo_id) ){
+		printf("O processo %i ultrapassou o limite de working set\n",processo_id);
+		frame=insert_pag_full_workingset(processo_id, page_number);
+	}
+	//verifica se ha frames vazios se não tem, insere a pagina
+	else if ( freeframes> 0){
+		frame=insert_pag_empty_frames(processo_id, page_number);
+	}
+
+	else{
+		frame=insert_pag_full_memory(processo_id, page_number);
+	}
+
+
+	lista_processos[processo_id].works.frames[page_number]=frame;
+
+
+	memoria_principal[frame] = lista_processos[processo_id].page_list[page_number];
+	add_page_to_queue(LIMITE_PAGINAS * processo_id + memoria_principal[frame].number);
+}
+
+int insert_pag_empty_frames(int processo_id, int page_number){
+	int i;
+	int frame=LIMITE_FRAMES-1;
+	int randompage = rand()%LIMITE_FRAMES; //sorteia uma pagina,
+	srand(time(NULL));
+
+	for (i = randompage; i < LIMITE_FRAMES; i++){
+		if(memoria_principal[i].processo_id == -1){
+			frame=refresh_LRUF(i); //atribui a variavel frame o valor do frame vazio
+			return frame;
+		}
+	}
+
+	for (i = 0; i < randompage; i++){
+		if(memoria_principal[i].processo_id == -1){
+			frame=refresh_LRUF(i); //atribui a variavel frame o valor do frame vazio
+			return frame;
+		}
+	}
+}
+
+int insert_pag_full_memory(int processo_id, int page_number){
+	int i;
+	int frame=LIMITE_FRAMES-1;//por padrao, em caso de erro, remover o last frame da lista para a virtual
+	int last = LIMITE_FRAMES-1; //ultimo da fila, ira para o inicio da fila, será primeiro
+
+	//atualiza processos na virtual
+	if (virtual_memory[0].processo_id != -1) {
+		if(virtual_memory[MEMORIA_2_LIM-1].processo_id != -1) memory_overflow();
+		for (i = MEMORIA_2_LIM-1; i > 0; i--) virtual_memory[i] = virtual_memory[i-1];
+
+	}
+
+	//movimenta o LRU
+	if(recent_frame[last] != -1) {
+		frame=refresh_LRUF(recent_frame[last] );
+		virtual_memory[0] = memoria_principal[ recent_frame[0] ];
+
+	}
+
+
+	lista_processos[memoria_principal[frame].processo_id].works.frames[memoria_principal[frame].number]=-1;
+
+	return frame;
+}
+
+int insert_pag_full_workingset(int processo_id, int page_number){
+	int i;
+	int remover = LIMITE_FRAMES-1;
+	int recent = -1;
+	int index = -1;
+	int randompage = rand()%LIMITE_PAGINAS; //gera uma pagina
+	srand(time(NULL));
+
+
+	//sorteia dentre o workingset qual pagina/frame saira da memoria
+	for (i = 0; i < LIMITE_PAGINAS; i++) if (lista_processos[processo_id].works.frames[i] != -1) {
+		remover = lista_processos[processo_id].works.frames[i];
+		//se encontrarmos uma pagina alocada antes da sorteada continuamos procurando, e encontrarmos depois usamos aquele frame para substituicao
+		if (i > randompage) break;
+	}
+	printf("Removendo processo do Frame %i\n", remover);
+
+
+	//atualiza processos na virtual
+	if (virtual_memory[0].processo_id != -1) {
+		if(virtual_memory[MEMORIA_2_LIM-1].processo_id != -1) memory_overflow();
+		for (i = MEMORIA_2_LIM-1; i > 0; i--) virtual_memory[i] = virtual_memory[i-1];
+	}
+
+	for (i = 0; i<LIMITE_FRAMES; i++) {
+		if ( recent_frame[i] == remover ){
+			recent = recent_frame[i];
+			index=i;
+			break ;
+		}
+	}
+
+	if (recent == -1 || index ==-1)
+	{
+		printf("Erro**\n%i %i", recent, index);
+		exit(-1);
+	}
+
+
+	refresh_LRUF(remover);
+
+	virtual_memory[0] = memoria_principal[ remover ];
+
+
+
+	lista_processos[ memoria_principal[remover].processo_id ].works.frames[memoria_principal[remover].number]=-1;
+
+	return remover;
+}
+
+
+int free_frames(){
+	int i;
+	n_frames_usados = 0;
+	n_frames_livres = 0;
+
+	for (i = 0; i < LIMITE_FRAMES; i++){
+		if(memoria_principal[i].processo_id > -1) n_frames_usados++;
+		else n_frames_livres++;
+	}
+
+	if ( (n_frames_usados + n_frames_livres) != LIMITE_FRAMES) {
+		printf("f=%i nf=%i\nErro2 em  qtdade frames\n",n_frames_usados , n_frames_livres);
+		exit(0);
+	}
+	return n_frames_livres;
+}
+
+int refresh_LRUF(int old_frame_in_memory){
+	int i,j;
+	int ToDo=0;
+	int recent=-1;
+
+	for (i = 0; i < LIMITE_FRAMES; i++){
+		if (recent_frame[i] == old_frame_in_memory){
+			//significa que o frame ja esta referenciado no LRUF
+			ToDo++;
+			break;
+		}
+	}
+
+	//insere na LRU pela primeira vez
+	if (ToDo == 0){
+		for (i = LIMITE_FRAMES; i > 0; i--) {
+			recent_frame[i] = recent_frame[i-1];
+		}
+		recent_frame[0] = old_frame_in_memory;
+	}
+
+	//reinsere no LRU
+	else if (ToDo == 1){
+		for (i = 0; i<LIMITE_FRAMES; i++) {
+			if(recent_frame[i]== old_frame_in_memory ){ //atualiza o LRU, e remove copias da fila antes de inserir
+				for (j = i; j > 0; j--) {
+					recent_frame[j]=recent_frame[j-1];
+				}
+				recent_frame[0]=old_frame_in_memory; //o ultimo vira o primeiro
+			}
+		}
+	}
+
+	//erros
+	else if ( ToDo >1){
+		printf("Erro ***\n r %i t %i",recent,ToDo);
+		exit(-1);
+	}
+
+	return recent_frame[0];
+}
