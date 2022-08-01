@@ -54,7 +54,7 @@ int n_frames_livres = LIMITE_FRAMES;
 int n_frames_usados = 0;
 
 struct Page memoria_principal[LIMITE_FRAMES];
-struct Page virtual_memory[MEMORIA_2_LIM];
+struct Page memoria_2[MEMORIA_2_LIM];
 
 pthread_t thread[LIMITE_PROCESSOS];
 pthread_mutex_t memoria_lock;
@@ -78,16 +78,14 @@ void* execute_process(int id){
 		pthread_mutex_unlock(&memoria_lock);
 		usleep(0);
 	}
-
 	pthread_mutex_lock(&memoria_lock);
 	printf("\n");
 	printf("---------------------------------------------------------------------------------------------------------------------------------------------------------------------------\n");
 	printf("\nParando o processo %d\n", id);
-	stop_process(id);
+	para_processo(id);
 	print_memoria();
 	pthread_mutex_unlock(&memoria_lock);
 }
-
 
 int main( int argc, char *argv[ ] ){
 
@@ -95,10 +93,8 @@ int main( int argc, char *argv[ ] ){
 		memoria_principal[i].processo_id = -1;
 	}
 	for (int i = 0; i < MEMORIA_2_LIM; i++){
-		virtual_memory[i].processo_id = -1;
+		memoria_2[i].processo_id = -1;
 	}
-
-
 	if (pthread_mutex_init(&memoria_lock, NULL) != 0) {
         printf("\n mutex failed\n");
         return 1;
@@ -107,19 +103,14 @@ int main( int argc, char *argv[ ] ){
         printf("\n mutex failed\n");
         return 1;
     }
-
-
 	for(int i = 0; i < LIMITE_PROCESSOS; i++){
 		pthread_create(&thread[i], NULL, execute_process, create_process());
 		usleep(DELAY);
 	}
-
 	for(int i = 0; i < LIMITE_PROCESSOS; i++){
 		pthread_join(thread[i], NULL);
 	}
-
 	pthread_mutex_destroy(&memoria_lock);
-
 	return 0;
 }
 
@@ -135,7 +126,7 @@ int create_process(){
 	n_processos_exec++;
 	for(i=0;i<LIMITE_PAGINAS;i++) lista_processos[processo.id].works.frames[i] = -1;
 	pthread_mutex_unlock(&lista_processos_lock);
-	initialize_page_list_of_process(LIMITE_PAGINAS, n_processo - 1);
+	cria_pg_lista_processos(LIMITE_PAGINAS, n_processo - 1);
 
 	return processo.id;
 }
@@ -175,7 +166,7 @@ void print_memoria(){
 	print_LRU();
 }
 
-void initialize_page_list_of_process(int size, int processo_id){
+void cria_pg_lista_processos(int size, int processo_id){
 	for(int i = 0; i < size; i++)
 	{
 		lista_processos[processo_id].page_list[i].processo_id = processo_id;
@@ -183,7 +174,7 @@ void initialize_page_list_of_process(int size, int processo_id){
 	}
 }
 
-void stop_process(int processo_id){
+void para_processo(int processo_id){
 
 	processos_parados[n_processos_parados] = processo_id;
 	n_processos_parados++;
@@ -194,7 +185,6 @@ void stop_process(int processo_id){
 			memoria_principal[i].processo_id = -1;
 		}
 	}
-
 	for (int i = 0; i < LIMITE_PAGINAS; i++) lista_processos[processo_id].works.frames[i]=-1;
 }
 
@@ -332,16 +322,16 @@ int insert_pag_full_memory(int processo_id, int page_number){
 	int last = LIMITE_FRAMES-1; //ultimo da fila, ira para o inicio da fila, será primeiro
 
 	//atualiza processos na virtual
-	if (virtual_memory[0].processo_id != -1) {
-		if(virtual_memory[MEMORIA_2_LIM-1].processo_id != -1) memory_overflow();
-		for (i = MEMORIA_2_LIM-1; i > 0; i--) virtual_memory[i] = virtual_memory[i-1];
+	if (memoria_2[0].processo_id != -1) {
+		if(memoria_2[MEMORIA_2_LIM-1].processo_id != -1) memory_overflow();
+		for (i = MEMORIA_2_LIM-1; i > 0; i--) memoria_2[i] = memoria_2[i-1];
 
 	}
 
 	//movimenta o LRU
 	if(recent_frame[last] != -1) {
 		frame=refresh_LRUF(recent_frame[last] );
-		virtual_memory[0] = memoria_principal[ recent_frame[0] ];
+		memoria_2[0] = memoria_principal[ recent_frame[0] ];
 
 	}
 
@@ -370,9 +360,9 @@ int insert_pag_full_workingset(int processo_id, int page_number){
 
 
 	//atualiza processos na virtual
-	if (virtual_memory[0].processo_id != -1) {
-		if(virtual_memory[MEMORIA_2_LIM-1].processo_id != -1) memory_overflow();
-		for (i = MEMORIA_2_LIM-1; i > 0; i--) virtual_memory[i] = virtual_memory[i-1];
+	if (memoria_2[0].processo_id != -1) {
+		if(memoria_2[MEMORIA_2_LIM-1].processo_id != -1) memory_overflow();
+		for (i = MEMORIA_2_LIM-1; i > 0; i--) memoria_2[i] = memoria_2[i-1];
 	}
 
 	for (i = 0; i<LIMITE_FRAMES; i++) {
@@ -392,7 +382,7 @@ int insert_pag_full_workingset(int processo_id, int page_number){
 
 	refresh_LRUF(remover);
 
-	virtual_memory[0] = memoria_principal[ remover ];
+	memoria_2[0] = memoria_principal[ remover ];
 
 
 
